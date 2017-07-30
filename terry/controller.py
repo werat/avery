@@ -136,8 +136,8 @@ class Controller(IJobController, IWorkerController):
         query.setdefault('$and', []).extend(
             {
                 '$or': [
-                    {'reqs.'+t: None},
-                    {'reqs.'+t: {'$lte': v}}
+                    {'reqs.' + t: None},
+                    {'reqs.' + t: {'$lte': v}}
                 ]
             }
             for t, v in resources.items()
