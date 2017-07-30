@@ -4,7 +4,7 @@ class Job:
     CANCELLED = 'cancelled'
     COMPLETED = 'completed'
 
-    def __init__(self, id_, tag, args, version, *,
+    def __init__(self, id_, reqs, args, version, *,
                  status=None,
                  created_at=None,
                  locked_at=None,
@@ -14,7 +14,7 @@ class Job:
                  worker_heartbeat=None,
                  worker_exception=None):
         self.id = id_
-        self.tag = tag
+        self.reqs = reqs
         self.args = args
         self.version = version
         self.status = status or Job.IDLE
@@ -43,7 +43,7 @@ class IJobController:
     def get_job(self, job_id):
         pass
 
-    def create_job(self, job_id, tag, args=None, run_at=None):
+    def create_job(self, job_id, *, reqs=None, args=None, run_at=None):
         pass
 
     def cancel_job(self, job_id, version):
@@ -54,7 +54,7 @@ class IJobController:
 
 
 class IWorkerController:
-    def acquire_job(self, tags, worker_id):
+    def acquire_job(self, resources, worker_id):
         pass
 
     def heartbeat_job(self, job_id, version):

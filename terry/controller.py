@@ -46,7 +46,8 @@ class Controller(IJobController, IWorkerController):
 
         self._jobs.create_indexes([idx('job_id', unique=True),
                                    idx('job_id', 'version'),
-                                   idx('tag', 'status', 'run_at', 'worker_heartbeat')])
+                                   idx('status', 'run_at'),
+                                   idx('status', 'worker_heartbeat')])
 
     def _job_from_doc(self, doc):
         return Job(doc.pop('job_id'), **doc)
@@ -95,8 +96,8 @@ class Controller(IJobController, IWorkerController):
 
         return None
 
-    def create_job(self, job_id, tag, args=None, run_at=None):
-        doc = {'job_id': job_id, 'tag': tag, 'args': args or {}, 'run_at': run_at,
+    def create_job(self, job_id, *, reqs=None, args=None, run_at=None):
+        doc = {'job_id': job_id, 'reqs': reqs or {}, 'args': args or {}, 'run_at': run_at,
                'version': 0, 'status': Job.IDLE, 'created_at': datetime.utcnow()}
         try:
             self._jobs.insert_one(doc)
@@ -123,47 +124,65 @@ class Controller(IJobController, IWorkerController):
     #    IWorkerController    #
     ###########################
 
-    def _find_one_and_update(self, query, update):
+    def _resources_cover_requirements(self, resources, requirements):
+        for t, v in requirements.items():
+            if t not in resources or resources[t] < v:
+                return False
+        return True
+
+    def _try_find_and_lock_job(self, query, resources, worker_id):
+        # NOTE: These constrains are not sufficient,
+        #       they are only to filter out as many candidates as possible.
+        query.setdefault('$and', []).extend(
+            {
+                '$or': [
+                    {'reqs.'+t: None},
+                    {'reqs.'+t: {'$lte': v}}
+                ]
+            }
+            for t, v in resources.items()
+        )
+
+        job = None
+
         try:
-            r = self._jobs.find_one_and_update(query, update, projection={'_id': False},
-                                               return_document=pymongo.collection.ReturnDocument.AFTER)
+            for candidate in self._jobs.find(query, projection={'_id': False}):
+                # This is an actual check for the requirements
+                if not self._resources_cover_requirements(resources, candidate['reqs']):
+                    continue
+
+                update = {'status': Job.LOCKED,
+                          'locked_at': datetime.utcnow(),
+                          'worker_id': worker_id,
+                          'worker_heartbeat': datetime.utcnow()}
+                try:
+                    job = self._update_job(candidate['job_id'], candidate['version'], **update)
+                except ConcurrencyError:
+                    # try another job
+                    pass
+
         except pymongo.errors.PyMongoError:
-            self._raise_retriable_error('find_one_and_update')
+            self._raise_retriable_error('find')
 
-        if r:
-            return self._job_from_doc(r)
+        return job
 
-        return None
-
-    def _try_acquire_idle_job(self, tags, worker_id):
-        query = {'tag': {'$in': tags}, 'status': Job.IDLE,
+    def _try_acquire_idle_job(self, resources, worker_id):
+        query = {'status': Job.IDLE,
                  '$or': [{'run_at': None}, {'run_at': {'$lt': datetime.utcnow()}}]}
 
-        update = {'$inc': {'version': 1},
-                  '$set': {'status': Job.LOCKED,
-                           'locked_at': datetime.utcnow(),
-                           'worker_id': worker_id,
-                           'worker_heartbeat': datetime.utcnow()}}
+        return self._try_find_and_lock_job(query, resources, worker_id)
 
-        return self._find_one_and_update(query, update)
-
-    def _try_reacquire_locked_job(self, tags, worker_id):
-        query = {'tag': {'$in': tags}, 'status': Job.LOCKED,
+    def _try_reacquire_locked_job(self, resources, worker_id):
+        query = {'status': Job.LOCKED,
                  'worker_heartbeat': {'$lt': datetime.utcnow() - self.HEARTBEAT_TIMEOUT}}
 
-        update = {'$inc': {'version': 1},
-                  '$set': {'status': Job.LOCKED,
-                           'locked_at': datetime.utcnow(),
-                           'worker_id': worker_id,
-                           'worker_heartbeat': datetime.utcnow()}}
+        return self._try_find_and_lock_job(query, resources, worker_id)
 
-        return self._find_one_and_update(query, update)
-
-    def acquire_job(self, tags, worker_id):
-        job = self._try_acquire_idle_job(tags, worker_id)
+    def acquire_job(self, resources, worker_id):
+        job = self._try_acquire_idle_job(resources, worker_id)
 
         if job is None:
-            job = self._try_reacquire_locked_job(tags, worker_id)
+            job = self._try_reacquire_locked_job(resources, worker_id)
 
         if job is None:
             # there are no available jobs

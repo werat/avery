@@ -16,7 +16,7 @@ def controller():
 
 @pytest.fixture
 def worker(controller):
-    worker = Worker('test-worker', ['test-tag'], None, controller)
+    worker = Worker('test-worker', {'cpu': 2, 'ram': 4}, None, controller)
     worker.start()
     yield worker
     worker.stop()

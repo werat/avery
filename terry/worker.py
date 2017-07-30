@@ -102,9 +102,9 @@ class WorkerThread(threading.Thread):
 
 
 class Worker:
-    def __init__(self, id_, job_tags, worker_func, controller, *, interrupt_via_exception=False):
+    def __init__(self, id_, resources, worker_func, controller, *, interrupt_via_exception=False):
         self._id = id_
-        self._job_tags = list(set(job_tags))
+        self._resources = resources
         self._worker_func = worker_func
         self._controller = controller
         self._interrupt_via_exception = interrupt_via_exception
@@ -134,7 +134,7 @@ class Worker:
         return self._job_ctx is not None
 
     def start(self):
-        self.logger.info('[%s] Listen for tags %s', self._id, self._job_tags)
+        self.logger.info('[%s] Available resources %r', self._id, self._resources)
         self.logger.info('[%s] Starting worker...', self._id)
         self._main_loop_thread.start()
 
@@ -203,7 +203,7 @@ class Worker:
 
     def _try_acquire_job(self):
         try:
-            job = self._controller.acquire_job(self._job_tags, self._id)
+            job = self._controller.acquire_job(self._resources, self._id)
         except ConcurrencyError:
             job = None
 

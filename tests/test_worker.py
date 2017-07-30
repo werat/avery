@@ -19,7 +19,7 @@ def test_worker_job_success(controller, worker):
     worker._worker_func = work_func
 
     job_id = controller.create_job_id()
-    controller.create_job(job_id, 'test-tag')
+    controller.create_job(job_id, reqs={'cpu': 1})
 
     job_started.wait()  # wait until worker start the job
     worker.stop()
@@ -42,7 +42,7 @@ def test_worker_job_exception(controller, worker):
     worker._worker_func = work_func
 
     job_id = controller.create_job_id()
-    controller.create_job(job_id, 'test-tag')
+    controller.create_job(job_id, reqs={'cpu': 1})
 
     job_started.wait()  # wait until worker start the job
     worker.stop()
@@ -86,7 +86,7 @@ def test_worker_is_busy(controller, worker):
     worker._worker_func = work_func
 
     job_id = controller.create_job_id()
-    controller.create_job(job_id, 'test-tag')
+    controller.create_job(job_id, reqs={'cpu': 1})
 
     job_started.wait()
 
@@ -115,7 +115,7 @@ def test_worker_requeue_job_on_error(controller, worker):
     worker._worker_func = work_func
 
     job_id = controller.create_job_id()
-    controller.create_job(job_id, 'test-tag')
+    controller.create_job(job_id, reqs={'cpu': 1})
 
     worker.join()
 
