@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 from terry.controller import Controller
-from terry.worker import Worker, JobChannel  # noqa
+from terry.worker import BasicResourceManager, Worker, JobChannel  # noqa
 
 
 def work_func(channel: JobChannel):
@@ -26,7 +26,7 @@ def setup_backend(db_uri):
 
 
 if __name__ == '__main__':
-    logging.basicConfig(format='%(asctime)s\t%(levelname)s:\t%(message)s', level=logging.INFO)
+    logging.basicConfig(format='%(asctime)s\t%(levelname)s:\t%(message)s', level=logging.DEBUG)
 
     db_uri = 'mongodb://localhost/terry-example'
 
@@ -34,7 +34,8 @@ if __name__ == '__main__':
 
     controller = Controller(db_uri)
 
-    worker = Worker('example-worker', {'cpu': 2, 'ram': 4}, work_func, controller)
+    worker = Worker('example-worker', BasicResourceManager({'cpu': 2, 'ram': 4}),
+                    work_func, controller)
     worker.start()
 
     job_id = controller.create_job_id()
