@@ -10,7 +10,10 @@ import traceback
 from .api import Job, ConcurrencyError, RetriableError
 
 
-__all__ = ['InterruptJob', 'Worker', 'JobChannel']
+__all__ = [
+    'ResourceManager', 'BasicResourceManager',
+    'InterruptJob', 'Worker', 'JobChannel'
+]
 
 
 class InterruptJob(Exception):
@@ -101,6 +104,51 @@ class WorkerThread(threading.Thread):
             self.exc_info = sys.exc_info()
 
 
+def _substract_resources(r1, r2):
+    result = r1.copy()
+    for k in r2:
+        v = r1[k] - r2[k]
+        if v > 0:
+            result[k] = v
+        else:
+            result.pop(k)
+    return result
+
+
+def _add_resources(r1, r2):
+    result = r1.copy()
+    for k in r2:
+        result[k] = r1.get(k, 0) + r2[k]
+    return result
+
+
+class ResourceManager:
+    def get_current_resources(self):
+        pass
+
+    def acquire(self):
+        pass
+
+    def reclaim(self, resources):
+        pass
+
+
+class BasicResourceManager(ResourceManager):
+    def __init__(self, resources):
+        self._resources = resources
+
+    def get_current_resources(self):
+        return self._resources.copy()
+
+    def acquire(self):
+        result = self._resources.copy()
+        self._resources = {}
+        return result
+
+    def reclaim(self, resources):
+        self._resources = _add_resources(self._resources, resources)
+
+
 class Worker:
     def __init__(self, id_, resources, worker_func, controller, *, interrupt_via_exception=False):
         self._id = id_
@@ -134,7 +182,7 @@ class Worker:
         return self._job_ctx is not None
 
     def start(self):
-        self.logger.info('[%s] Available resources %r', self._id, self._resources)
+        self.logger.info('[%s] Available resources %r', self._id, self._resources.get_current_resources())
         self.logger.info('[%s] Starting worker...', self._id)
         self._main_loop_thread.start()
 
@@ -153,6 +201,19 @@ class Worker:
     def stop(self):
         self.request_stop()
         self.join()
+
+    def _reclaim_resources(self, resources):
+        self._resources.reclaim(resources)
+        self.logger.debug('[%s] Reclaimed resources: %r', self._id, resources)
+
+    def _reset_current_job(self):
+        assert self._job_ctx is not None
+        assert self._worker_thread is not None
+        assert not self._worker_thread.is_alive()
+
+        self._reclaim_resources(self._job_ctx.job.reqs)
+        self._job_ctx = None
+        self._worker_thread = None
 
     def _should_requeue_current_job(self):
         assert self._job_ctx is not None
@@ -202,8 +263,11 @@ class Worker:
                 retry_delay = 0
 
     def _try_acquire_job(self):
+        # lock resources from manager
+        resources = self._resources.acquire()
+        self.logger.debug('[%s] Acquired resources: %r', self._id, resources)
         try:
-            job = self._controller.acquire_job(self._resources, self._id)
+            job = self._controller.acquire_job(resources, self._id)
         except ConcurrencyError:
             job = None
 
@@ -213,7 +277,10 @@ class Worker:
             self._worker_thread = WorkerThread(target=self._worker_func, args=(JobChannel(self._job_ctx),))
             self._worker_thread.daemon = True  # to make force stop possible
             self._worker_thread.start()
+            # reclaim leftovers
+            self._reclaim_resources(_substract_resources(resources, job.reqs))
         else:
+            self._reclaim_resources(resources)
             time.sleep(math.e - random.random())
 
     def _try_update_current_job(self):
@@ -239,8 +306,7 @@ class Worker:
             self._worker_thread.join(math.pi - random.random())
         else:
             self.logger.info('[%s] Processing of job %s was terminated', self._id, self._job_ctx.job.id)
-            self._job_ctx = None
-            self._worker_thread = None
+            self._reset_current_job()
 
     def _try_heartbeat_current_job(self):
         try:
@@ -268,8 +334,7 @@ class Worker:
                              self._id, self._job_ctx.job.id)
         else:
             self.logger.info('[%s] Job %s has been requeued', self._id, self._job_ctx.job.id)
-            self._job_ctx = None
-            self._worker_thread = None
+            self._reset_current_job()
 
     def _try_finalize_current_job(self):
         assert not self._worker_thread.is_alive()
@@ -289,8 +354,7 @@ class Worker:
 
         if job:
             self.logger.info('[%s] Job %s has been processed', self._id, self._job_ctx.job.id)
-            self._job_ctx = None
-            self._worker_thread = None
+            self._reset_current_job()
         else:
             self._job_ctx.outdated = True
             self.logger.info('[%s] Failed to mark job %s as completed due to version mismatch',

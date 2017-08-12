@@ -1,7 +1,7 @@
 import pytest
 
 from terry.controller import Controller
-from terry.worker import Worker
+from terry.worker import Worker, BasicResourceManager
 
 
 @pytest.fixture
@@ -15,8 +15,13 @@ def controller():
 
 
 @pytest.fixture
-def worker(controller):
-    worker = Worker('test-worker', {'cpu': 2, 'ram': 4}, None, controller)
+def resource_manager():
+    return BasicResourceManager({'cpu': 2, 'ram': 4})
+
+
+@pytest.fixture
+def worker(resource_manager, controller):
+    worker = Worker('test-worker', resource_manager, None, controller)
     worker.start()
     yield worker
     worker.stop()
