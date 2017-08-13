@@ -104,7 +104,7 @@ class WorkerThread(threading.Thread):
             self.exc_info = sys.exc_info()
 
 
-def _substract_resources(r1, r2):
+def substract_resources(r1, r2):
     result = r1.copy()
     for k in r2:
         v = r1[k] - r2[k]
@@ -112,13 +112,6 @@ def _substract_resources(r1, r2):
             result[k] = v
         else:
             result.pop(k)
-    return result
-
-
-def _add_resources(r1, r2):
-    result = r1.copy()
-    for k in r2:
-        result[k] = r1.get(k, 0) + r2[k]
     return result
 
 
@@ -136,17 +129,22 @@ class ResourceManager:
 class BasicResourceManager(ResourceManager):
     def __init__(self, resources):
         self._resources = resources
+        self._lock = threading.Lock()
 
     def get_current_resources(self):
-        return self._resources.copy()
+        with self._lock:
+            return self._resources.copy()
 
     def acquire(self):
-        result = self._resources.copy()
-        self._resources = {}
+        with self._lock:
+            result = self._resources.copy()
+            self._resources = {}
         return result
 
     def reclaim(self, resources):
-        self._resources = _add_resources(self._resources, resources)
+        with self._lock:
+            for k in resources:
+                self._resources[k] = self._resources.get(k, 0) + resources[k]
 
 
 class Worker:
@@ -278,7 +276,7 @@ class Worker:
             self._worker_thread.daemon = True  # to make force stop possible
             self._worker_thread.start()
             # reclaim leftovers
-            self._reclaim_resources(_substract_resources(resources, job.reqs))
+            self._reclaim_resources(substract_resources(resources, job.reqs))
         else:
             self._reclaim_resources(resources)
             time.sleep(math.e - random.random())
