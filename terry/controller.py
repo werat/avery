@@ -50,6 +50,7 @@ class Controller(IJobController, IWorkerController):
                                    idx('status', 'worker_heartbeat')])
 
     def _job_from_doc(self, doc):
+        doc.pop('meta')
         return Job(doc.pop('job_id'), **doc)
 
     def _raise_retriable_error(self, method):
@@ -98,7 +99,9 @@ class Controller(IJobController, IWorkerController):
 
     def create_job(self, job_id, *, reqs=None, args=None, run_at=None):
         doc = {'job_id': job_id, 'reqs': reqs or {}, 'args': args or {}, 'run_at': run_at,
-               'version': 0, 'status': Job.IDLE, 'created_at': datetime.utcnow()}
+               'version': 0, 'status': Job.IDLE, 'created_at': datetime.utcnow(),
+               'meta': {'reqs': list(reqs.keys()) if reqs else []}}
+
         try:
             self._jobs.insert_one(doc)
         except pymongo.errors.DuplicateKeyError:
@@ -124,15 +127,7 @@ class Controller(IJobController, IWorkerController):
     #    IWorkerController    #
     ###########################
 
-    def _resources_cover_requirements(self, resources, requirements):
-        for t, v in requirements.items():
-            if t not in resources or resources[t] < v:
-                return False
-        return True
-
     def _try_find_and_lock_job(self, query, resources, worker_id):
-        # NOTE: These constrains are not sufficient,
-        #       they are only to filter out as many candidates as possible.
         query.setdefault('$and', []).extend(
             {
                 '$or': [
@@ -142,29 +137,26 @@ class Controller(IJobController, IWorkerController):
             }
             for t, v in resources.items()
         )
+        query['$and'].append(
+            # check that job requirements are a subset of worker resources
+            {'meta.reqs': {'$not': {'$elemMatch': {'$nin': list(resources.keys())}}}}
+        )
 
-        job = None
-
+        update = {'$inc': {'version': 1},
+                  '$set': {'status': Job.LOCKED,
+                           'locked_at': datetime.utcnow(),
+                           'worker_id': worker_id,
+                           'worker_heartbeat': datetime.utcnow()}}
         try:
-            for candidate in self._jobs.find(query, projection={'_id': False}):
-                # This is an actual check for the requirements
-                if not self._resources_cover_requirements(resources, candidate['reqs']):
-                    continue
-
-                update = {'status': Job.LOCKED,
-                          'locked_at': datetime.utcnow(),
-                          'worker_id': worker_id,
-                          'worker_heartbeat': datetime.utcnow()}
-                try:
-                    job = self._update_job(candidate['job_id'], candidate['version'], **update)
-                except ConcurrencyError:
-                    # try another job
-                    pass
-
+            r = self._jobs.find_one_and_update(query, update, projection={'_id': False},
+                                               return_document=pymongo.collection.ReturnDocument.AFTER)
         except pymongo.errors.PyMongoError:
-            self._raise_retriable_error('find')
+            self._raise_retriable_error('find_one_and_update')
 
-        return job
+        if r:
+            return self._job_from_doc(r)
+
+        return None
 
     def _try_acquire_idle_job(self, resources, worker_id):
         query = {'status': Job.IDLE,
