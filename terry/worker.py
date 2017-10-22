@@ -75,8 +75,8 @@ class JobChannel:
         self.__ctx.requeue_job(run_at)
         raise _RequeueRequested
 
-    def requeue_job_on_error(self):
-        self.__ctx.requeue_on_error = True
+    def requeue_job_on_error(self, flag=True):
+        self.__ctx.requeue_on_error = flag
 
 
 class WorkerThread(threading.Thread):
