@@ -263,23 +263,30 @@ class Worker:
     def _try_acquire_job(self):
         # lock resources from manager
         resources = self._resources.acquire()
-        self.logger.debug('[%s] Acquired resources: %r', self._id, resources)
+        reclaimed = False
         try:
-            job = self._controller.acquire_job(resources, self._id)
-        except ConcurrencyError:
-            job = None
+            self.logger.debug('[%s] Acquired resources: %r', self._id, resources)
+            try:
+                job = self._controller.acquire_job(resources, self._id)
+            except ConcurrencyError:
+                job = None
 
-        if job:
-            self._job_ctx = JobContext(self.id, job)
-            self.logger.info('[%s] Acquired job %s', self._id, self._job_ctx.job.id)
-            self._worker_thread = WorkerThread(target=self._worker_func, args=(JobChannel(self._job_ctx),))
-            self._worker_thread.daemon = True  # to make force stop possible
-            self._worker_thread.start()
-            # reclaim leftovers
-            self._reclaim_resources(substract_resources(resources, job.reqs))
-        else:
-            self._reclaim_resources(resources)
-            time.sleep(math.e - random.random())
+            if job:
+                self._job_ctx = JobContext(self.id, job)
+                self.logger.info('[%s] Acquired job %s', self._id, self._job_ctx.job.id)
+                self._worker_thread = WorkerThread(target=self._worker_func, args=(JobChannel(self._job_ctx),))
+                self._worker_thread.daemon = True  # to make force stop possible
+                self._worker_thread.start()
+                # reclaim leftovers
+                self._reclaim_resources(substract_resources(resources, job.reqs))
+                reclaimed = True
+            else:
+                self._reclaim_resources(resources)
+                reclaimed = True
+                time.sleep(math.e - random.random())
+        except Exception:
+            if not reclaimed:
+                self._reclaim_resources(resources)
 
     def _try_update_current_job(self):
         job = self._controller.get_job(self._job_ctx.job.id)
