@@ -287,6 +287,7 @@ class Worker:
         except Exception:
             if not reclaimed:
                 self._reclaim_resources(resources)
+            raise
 
     def _try_update_current_job(self):
         job = self._controller.get_job(self._job_ctx.job.id)
